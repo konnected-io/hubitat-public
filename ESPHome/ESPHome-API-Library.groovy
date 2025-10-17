@@ -994,6 +994,11 @@ private void parseMessage(ByteArrayInputStream stream, long length) {
         case MSG_PING_REQUEST:
             sendMessage(MSG_PING_RESPONSE)
             break
+        case MSG_AUTHENTICATION_RESPONSE:
+            if (!handled) {
+                espHomeAuthenticationResponse(tags)
+            }
+            break
         case MSG_LIST_BINARYSENSOR_RESPONSE:
             parse espHomeListEntitiesBinarySensorResponse(tags)
             break
@@ -1102,17 +1107,24 @@ private void parseMessage(ByteArrayInputStream stream, long length) {
     espHomeSchedulePing()
 }
 
-private void espHomeConnectRequest(String password = null) {
+private void espHomeAuthenticationRequest(String password = null) {
     // Message sent after the hello response to authenticate the client
     // Can only be sent by the client and only at the beginning of the connection
     log.info "ESPHome sending connect request (${password ? 'using' : 'no'} password)"
-    sendMessage(MSG_CONNECT_REQUEST, [
-            1: [ password as String, WIRETYPE_LENGTH_DELIMITED ]
-    ], MSG_CONNECT_RESPONSE, 'espHomeConnectResponse')
+    Map<Integer, List> tags = [:]
+    if (password) {
+        tags[1] = [ password as String, WIRETYPE_LENGTH_DELIMITED ]
+        sendMessage(MSG_AUTHENTICATION_REQUEST, tags, MSG_AUTHENTICATION_RESPONSE, 'espHomeAuthenticationResponse')
+        return
+    }
+
+    // Devices without a password do not reply, so advance the handshake immediately
+    sendMessage(MSG_AUTHENTICATION_REQUEST, tags)
+    espHomeAuthenticationResponse([:])
 }
 
 /* groovylint-disable-next-line UnusedPrivateMethod */
-private void espHomeConnectResponse(Map<Integer, List> tags) {
+private void espHomeAuthenticationResponse(Map<Integer, List> tags) {
     Boolean invalidPassword = getBooleanTag(tags, 1)
     if (invalidPassword) {
         log.error 'ESPHome invalid password (update configuration setting)'
@@ -1231,8 +1243,8 @@ private void espHomeHelloResponse(Map<Integer, List> tags) {
         }
     }
 
-    // Step 2: Send the ConnectRequest message
-    espHomeConnectRequest(settings.password as String)
+    // Step 2: Send the AuthenticationRequest message
+    espHomeAuthenticationRequest(settings.password as String)
 }
 
 private void espHomeListEntitiesRequest() {
@@ -1494,8 +1506,8 @@ private void logWarning(String s) {
  */
 @Field static final int MSG_HELLO_REQUEST = 1
 @Field static final int MSG_HELLO_RESPONSE = 2
-@Field static final int MSG_CONNECT_REQUEST = 3
-@Field static final int MSG_CONNECT_RESPONSE = 4
+@Field static final int MSG_AUTHENTICATION_REQUEST = 3
+@Field static final int MSG_AUTHENTICATION_RESPONSE = 4
 @Field static final int MSG_DISCONNECT_REQUEST = 5
 @Field static final int MSG_DISCONNECT_RESPONSE = 6
 @Field static final int MSG_PING_REQUEST = 7
