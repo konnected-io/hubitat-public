@@ -8,13 +8,13 @@ This is a Konnected fork of `bradsjm/hubitat-public` (a personal collection of H
 
 **The only file that matters here is `ESPHome/ESPHome-API-Library.groovy`** — the Hubitat library that implements ESPHome's native protobuf API. It is what lets Konnected's ESPHome-based Alarm Panels and Garage Door Openers talk to Hubitat. Everything else (`Aqara/`, `Component/`, `LedMiniDashboard/`, `PhilipsHue/`, `ThirdReality/`, `Tuya/`, and the example drivers in `ESPHome/`) is inherited fork content — don't modify it unless explicitly asked.
 
-`ESPHome/ESPHome-API-Library-Bundle.zip` is a generated artifact of that same file (see Bundle below).
+`ESPHome/ESPHome-API-Library-Bundle.zip` is a generated artifact of that same file. It is *not* how the library reaches Konnected customers — see "How this library actually ships" below before assuming anything in this repo is on the release path.
 
 ## Build / test / lint
 
 There is none. No Gradle, no CodeNarc config, no test suite in the repo — Groovy here is source-only, executed by the Hubitat hub's sandboxed runtime.
 
-The only automation is `.github/workflows/update-bundle.yml`: on any push touching `ESPHome/ESPHome-API-Library.groovy`, CI copies it to `esphome.espHomeApiHelper.groovy`, `zip -u`s it into `ESPHome-API-Library-Bundle.zip`, and auto-commits the zip. **Never hand-edit the zip's contents** — edit the `.groovy` and either let CI regenerate the zip on push or run the same three commands locally. The entry name inside the zip must stay `esphome.espHomeApiHelper.groovy` (`<namespace>.<library name>`) or Hubitat's bundle importer rejects it.
+The only automation in this repo is `.github/workflows/update-bundle.yml`: on any push touching `ESPHome/ESPHome-API-Library.groovy`, CI copies it to `esphome.espHomeApiHelper.groovy`, `zip -u`s it into `ESPHome-API-Library-Bundle.zip`, and auto-commits the zip. **Never hand-edit the zip's contents** — edit the `.groovy` and either let CI regenerate the zip on push or run the same three commands locally. The entry name inside the zip must stay `esphome.espHomeApiHelper.groovy` (`<namespace>.<library name>`) or Hubitat's bundle importer rejects it. This zip is upstream's packaging path, not Konnected's.
 
 Verifying a change means installing it on a real hub: paste the library into Hubitat's **Libraries** section (not Drivers/Apps), install a driver that `#include`s it, point the device at a real ESPHome node, and watch the hub logs. Enabling the driver's `logEnable` preference turns on per-message trace logging in the library and raises the ESPHome device's own subscribed log level to DEBUG.
 
@@ -103,7 +103,27 @@ There's no Groovy toolchain installed, but two useful checks are cheap to set up
 
 Note the library is plain LF. `file` reports it as "Unicode text ... with escape sequences" because of box-drawing characters in comments, not line endings — a raw `git diff` against upstream looks enormous due to reformatting, so use `--ignore-all-space` when comparing.
 
-Note that `importUrl`, `ESPHome/packageManifest.json`, and `repository.json` all still point at `raw.githubusercontent.com/bradsjm/...`, not at this fork — so a Hubitat Package Manager install or a driver's "Import" button pulls upstream's code, not the code in this repo. Anything Konnected ships has to reference this fork's raw URLs explicitly.
+## How this library actually ships to Konnected customers
+
+Nothing in *this* repo is the distribution mechanism. `ESPHome/packageManifest.json`, `repository.json`, the `importUrl` fields (all still pointing at `bradsjm/...`), `ESPHome-API-Library-Bundle.zip`, and the `update-bundle.yml` workflow are all inherited upstream machinery that Konnected does not use.
+
+The real chain lives in **`~/workspace/konnected-hubitat`** (`konnected-io/konnected-hubitat`), which also holds Konnected's 17 actual product drivers (`drivers/konnected-*.groovy` — alarm panel, GDOv1-S / v2-S / v2-Q, and the child device drivers). There is no Konnected driver in this repo.
+
+Its `.github/workflows/release.yml` fires **on GitHub release creation** and, for each product bundle, does:
+
+```
+wget -O <Bundle>/esphome.espHomeApiHelper.groovy \
+  https://raw.githubusercontent.com/konnected-io/hubitat-public/refs/heads/main/ESPHome/ESPHome-API-Library.groovy
+```
+
+then zips each bundle and uploads it as a release asset. The HPM manifests (`package-alarm-panel.json`, `package-gdov1s.json`, `package-gdov2s.json`, `package-gdov2q.json`) point at `releases/latest/download/...`.
+
+**Two consequences worth holding onto:**
+
+1. **`main` in this repo is the release input, and it is not pinned.** The workflow fetches `refs/heads/main` at the moment a release is cut — no commit, no tag. Whatever sits on `main` when someone tags a release in `konnected-hubitat` is what ships to every customer. There is no staging step between a push here and a customer install.
+2. **The bundle zip here is irrelevant to shipping** — `konnected-hubitat` builds its own bundles from the raw `.groovy`. Keeping the zip in sync is only about not leaving the repo internally inconsistent; it is not on the customer path.
+
+When changing the library, check the consumers in `konnected-hubitat/drivers/` rather than the example drivers in this repo. The v1.3 rebase was verified against them: the library's public surface (constants + non-private methods) is purely additive with no removals, and every message-map shape those drivers consume (`binary`, `switch`, `cover`, `lock`, `select`, `number`, `sensor`, `text`) is byte-identical to v1.2.
 
 ## Style
 
