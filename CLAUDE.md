@@ -68,15 +68,23 @@ The library owns these `state` keys: `reconnectDelay`, `requireRefresh`, `servic
 
 `origin` = `konnected-io/hubitat-public`, `upstream` = `bradsjm/hubitat-public`.
 
-`main` is rebased onto upstream v1.3 (ESPHome 2026.2.0 support) and carries `API_HELPER_VERSION = '1.3.1'` — bumped because our content differs from upstream's `1.3` and that string is the only build marker visible from a hub. (What's published to customers today, via `konnected-hubitat` release 2025.10.1, is still `1.2`.)
+**As of 2026-07-30 the fork carries no library changes at all.** `main` tracks `upstream/main` exactly; the only file that differs is this CLAUDE.md. Keep it that way — anything we need in the library should go upstream as a PR rather than accumulate here, because a divergent fork makes every future upstream pickup a manual merge.
 
-The fork delta is ~54 lines, submitted upstream as [bradsjm/hubitat-public#45](https://github.com/bradsjm/hubitat-public/pull/45) and marked in-source as `FIX-13`/`FIX-14`/`FIX-15` to match the file's existing convention. If that PR merges, the delta should collapse to zero — the branch and `main` carry byte-identical copies of the library specifically so it can. Verified on a hub against a GDO blaQ running ESPHome 2026.7.3 (API 1.14, the fast path).
+Getting back in sync when upstream moves is therefore just:
 
-1. **`case MSG_AUTHENTICATION_RESPONSE` in `parseMessage`** → `espHomeUnsupervisedAuthenticationResponse()`. Upstream's `espHomeConnectRequest()` gates on the negotiated API version: API ≤ 1.11 waits for a reply, API ≥ 1.12 advances immediately without supervising. That gate is correct and must be kept — password auth was *removed* in ESPHome 2026.1.0, so those devices auto-authenticate on Hello and never reply. But a 2025.10–2025.12 device built with `USE_API_PASSWORD` still does reply, and without this case that reply is logged as an unhandled message type while an invalid password goes undetected. The handler deliberately does *not* call `espHomeConnectResponse()`, which would queue a duplicate `DeviceInfoRequest` on the fast path.
+```
+git fetch upstream && git rebase upstream/main
+```
 
-2. **Per-entity `device_id` field numbers.** Upstream shipped a single global `ENTITY_DEVICE_ID_PROTO_FIELD = 26` with a `*** VERIFY THIS VALUE ***` box in the source that never got verified. There is no global number — each `ListEntitiesXxxResponse` gives `device_id` its own next-free field (26 is correct only for climate), and it's a `uint32` varint, not a string. Replaced with a `parseEntity(tags, deviceIdField)` parameter read via `getIntTag`, defaulting to `0`.
+History: the fork previously sat on v1.2 plus a local passwordless-auth patch. It was rebased onto upstream v1.3, three fixes were made on top, and those were submitted and merged as [bradsjm/hubitat-public#45](https://github.com/bradsjm/hubitat-public/pull/45) — so they are upstream's code now, marked in-source as `FIX-13`/`FIX-14`/`FIX-15`. Upstream also took the `API_HELPER_VERSION = '1.3.1'` bump, so the version strings agree again.
 
-3. **`protobufDecode()` generics restored to `Map<Integer, List>`.** Upstream reduced it to a raw `Map` while leaving the method `@CompileStatic`. That makes `tags.computeIfAbsent(tag){...}` return `Object`, so the following `.add(val)` is a static type-check error. Groovy 2.4 lets it through; Groovy 3+ rejects it and the *entire library* fails to compile, taking every driver with it. Don't re-strip these — see the `KONNECTED:` comment on the method.
+The three fixes are worth knowing about because they are load-bearing and easy to undo by accident:
+
+1. **`case MSG_AUTHENTICATION_RESPONSE` in `parseMessage`** → `espHomeUnsupervisedAuthenticationResponse()`. `espHomeConnectRequest()` gates on the negotiated API version: API ≤ 1.11 waits for a reply, API ≥ 1.12 advances immediately without supervising. That gate is correct and must be kept — password auth was *removed* in ESPHome 2026.1.0, so those devices auto-authenticate on Hello and never reply. But a 2025.10–2025.12 device built with `USE_API_PASSWORD` still does reply, and without this case that reply is logged as an unhandled message type while an invalid password goes undetected. The handler deliberately does *not* call `espHomeConnectResponse()`, which would queue a duplicate `DeviceInfoRequest` on the fast path.
+
+2. **Per-entity `device_id` field numbers.** There is no global field number — each `ListEntitiesXxxResponse` gives `device_id` its own next-free field (26 is correct only for climate), and it's a `uint32` varint, not a string. Hence `parseEntity(tags, deviceIdField)` read via `getIntTag`, defaulting to `0`.
+
+3. **`protobufDecode()` generics must stay `Map<Integer, List>`.** With a raw `Map`, `tags.computeIfAbsent(tag){...}` returns `Object`, so the following `.add(val)` is a static type-check error. Groovy 2.4 lets it through; Groovy 3+ rejects it and the *entire library* fails to compile, taking every driver with it.
 
 Device handshake behavior, if you need to reason about it again:
 
@@ -126,6 +134,26 @@ then zips each bundle and uploads it as a release asset. The HPM manifests (`pac
 
 1. **`main` in this repo is the release input, and it is not pinned.** The workflow fetches `refs/heads/main` at the moment a release is cut — no commit, no tag. Whatever sits on `main` when someone tags a release in `konnected-hubitat` is what ships to every customer. There is no staging step between a push here and a customer install.
 2. **The bundle zip here is irrelevant to shipping** — `konnected-hubitat` builds its own bundles from the raw `.groovy`. Keeping the zip in sync is only about not leaving the repo internally inconsistent; it is not on the customer path.
+
+### Cutting a release
+
+Creating the GitHub release is only half of it. HPM decides whether to *offer* an existing install an update by comparing the `version` field in each `package-*.json` — which it reads from `master`, not from the release. The bundle URL is `releases/latest/download/...`, so it repoints the instant a release is published, but without a version bump no existing customer is ever prompted. Both steps are required:
+
+1. Patch-bump `version` in all four `package-*.json` on `master` and push (leave `dateReleased` alone — precedent is `58a5dc7`).
+2. `gh release create <YYYY.M.PATCH> --target master` — CalVer, e.g. `2026.7.0`.
+
+The workflow fires on release creation, `wget`s the library from `hubitat-public@main`, and uploads five assets: the shared `ESPHome-API-Library-Bundle.zip` plus one per product.
+
+Because all four packages share the one bundle URL, **a release ships every product at once** — there is no way to release the GDO path without also releasing the alarm panel path. Factor that into what you test before cutting.
+
+Verify after releasing by fetching through the real URL rather than trusting the green check:
+
+```
+curl -sSL -o b.zip https://github.com/konnected-io/konnected-hubitat/releases/latest/download/ESPHome-API-Library-Bundle.zip
+unzip -p b.zip esphome.espHomeApiHelper.groovy | grep API_HELPER_VERSION
+```
+
+Release `2026.7.0` (2026-07-30) shipped library `1.3.1`; package versions went to alarm-panel 1.0.3, gdov1s 1.0.3, gdov2s 1.1.3, gdov2q 1.2.3.
 
 When changing the library, check the consumers in `konnected-hubitat/drivers/` rather than the example drivers in this repo. The v1.3 rebase was verified against them: the library's public surface (constants + non-private methods) is purely additive with no removals, and every message-map shape those drivers consume (`binary`, `switch`, `cover`, `lock`, `select`, `number`, `sensor`, `text`) is byte-identical to v1.2.
 
