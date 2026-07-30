@@ -68,7 +68,9 @@ The library owns these `state` keys: `reconnectDelay`, `requireRefresh`, `servic
 
 `origin` = `konnected-io/hubitat-public`, `upstream` = `bradsjm/hubitat-public`.
 
-`main` is rebased onto upstream v1.3 (`API_HELPER_VERSION = '1.3'`, ESPHome 2026.2.0 support). The fork delta is now one commit, ~53 lines, each change marked with a `KONNECTED:` comment:
+`main` is rebased onto upstream v1.3 (ESPHome 2026.2.0 support) and carries `API_HELPER_VERSION = '1.3.1'` — bumped because our content differs from upstream's `1.3` and that string is the only build marker visible from a hub. (What's published to customers today, via `konnected-hubitat` release 2025.10.1, is still `1.2`.)
+
+The fork delta is ~54 lines, submitted upstream as [bradsjm/hubitat-public#45](https://github.com/bradsjm/hubitat-public/pull/45) and marked in-source as `FIX-13`/`FIX-14`/`FIX-15` to match the file's existing convention. If that PR merges, the delta should collapse to zero — the branch and `main` carry byte-identical copies of the library specifically so it can. Verified on a hub against a GDO blaQ running ESPHome 2026.7.3 (API 1.14, the fast path).
 
 1. **`case MSG_AUTHENTICATION_RESPONSE` in `parseMessage`** → `espHomeUnsupervisedAuthenticationResponse()`. Upstream's `espHomeConnectRequest()` gates on the negotiated API version: API ≤ 1.11 waits for a reply, API ≥ 1.12 advances immediately without supervising. That gate is correct and must be kept — password auth was *removed* in ESPHome 2026.1.0, so those devices auto-authenticate on Hello and never reply. But a 2025.10–2025.12 device built with `USE_API_PASSWORD` still does reply, and without this case that reply is logged as an unhandled message type while an invalid password goes undetected. The handler deliberately does *not* call `espHomeConnectResponse()`, which would queue a duplicate `DeviceInfoRequest` on the fast path.
 
@@ -85,6 +87,8 @@ Device handshake behavior, if you need to reason about it again:
 | 2026.1+ | 1.14 | auto-auth, password auth removed | n/a |
 
 We still send `AuthenticationRequest` unconditionally; 2026.1+ has no `case 3:` in its dispatcher and the `default:` branch ignores it, so this is safe.
+
+**Watch out:** `update-bundle.yml` triggers on *any* branch push touching the library, not just `main` — it will append an auto-commit regenerating the zip to whatever branch you pushed, including PR branches, and that zip conflicts on rebase. Resolve those by regenerating rather than picking a side.
 
 **Verify protocol claims against sources, not changelogs.** Upstream's v1.3 commit message is a long, confident changelog that is wrong in places (its climate field mapping was broken and had to be fixed by the *next* commit; FIX-9's stated premise was already true in the baseline; FIX-6's claim that API ≥ 1.12 never replies "even with a password set" is false for 2025.10–2025.12). Ground truth:
 
