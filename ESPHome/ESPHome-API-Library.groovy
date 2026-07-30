@@ -859,11 +859,11 @@ private void parseMessage(ByteArrayInputStream stream, long length) {
             espHomeDisconnectRequest(); break
         case MSG_PING_REQUEST:
             sendMessage(MSG_PING_RESPONSE); break
-        // KONNECTED: ESPHome 2025.10-2025.12 built with USE_API_PASSWORD still replies with
-        // AuthenticationResponse, even though espHomeConnectRequest() no longer waits for it on
-        // API >= 1.12. Without this case the reply is logged as an unhandled message type and an
-        // invalid password is never surfaced. Guarded on !handled so the supervised API <= 1.11
-        // path (which already dispatches via onSuccess) does not run the handler twice.
+        // FIX-13: completes FIX-6. ESPHome 2025.10-2025.12 built with USE_API_PASSWORD still
+        // replies with AuthenticationResponse, even though espHomeConnectRequest() no longer
+        // waits for it on API >= 1.12. Without this case the reply is logged as an unhandled
+        // message type and an invalid password is never surfaced. Guarded on !handled so the
+        // supervised API <= 1.11 path (which dispatches via onSuccess) cannot run twice.
         case MSG_AUTHENTICATION_RESPONSE:
             if (!handled) { espHomeUnsupervisedAuthenticationResponse(tags) }
             break
@@ -989,10 +989,10 @@ private void espHomeConnectResponse(Map tags) {
     espHomeDeviceInfoRequest()
 }
 
-// KONNECTED: handles an AuthenticationResponse that arrives on the API >= 1.12 fast path, where
-// the request was sent unsupervised. Only the invalid_password outcome needs acting on -- the
-// connection has already been brought online and DeviceInfo already requested, so this must NOT
-// re-run espHomeConnectResponse() or it would queue a duplicate DeviceInfoRequest.
+// FIX-13: handles an AuthenticationResponse that arrives on the API >= 1.12 fast path, where the
+// request was sent unsupervised. Only the invalid_password outcome needs acting on -- the
+// connection is already online and DeviceInfo already requested, so this must NOT re-run
+// espHomeConnectResponse() or it would queue a duplicate DeviceInfoRequest.
 /* groovylint-disable-next-line UnusedPrivateMethod */
 private void espHomeUnsupervisedAuthenticationResponse(Map tags) {
     if (getBooleanTag(tags, 1)) {
@@ -1320,11 +1320,11 @@ private static boolean hasCapability(int capabilities, int capability) {
     return capabilities & capability
 }
 
-// deviceId -- ESPHome 2025.7+ sub-device grouping (proto field device_id, uint32).
-// KONNECTED: the field number is NOT global. Every ListEntitiesXxxResponse assigns device_id its
-// own next-free number (binary_sensor/switch=10, text_sensor/select/button=9, camera=8,
-// cover/fan=13, sensor/number=14, light=16, siren=11, lock=12, media_player=10, climate=26), so
-// each decoder passes its own. Verified against aioesphomeapi/api.proto.
+// FIX-14: corrects ADD-8/ADD-9. deviceId is ESPHome 2025.7+ sub-device grouping (proto field
+// device_id, uint32). The field number is NOT global: every ListEntitiesXxxResponse assigns
+// device_id its own next-free number (binary_sensor/switch=10, text_sensor/select/button=9,
+// camera=8, cover/fan=13, sensor/number=14, light=16, siren=11, lock=12, media_player=10,
+// climate=26), so each decoder passes its own. Verified against aioesphomeapi/api.proto.
 // Returns 0 when absent: pre-2025.7 firmware, builds without USE_DEVICES, or entities that belong
 // to the top-level device rather than a sub-device. Drivers can test `if (entity.deviceId)`.
 @CompileStatic
@@ -1381,11 +1381,11 @@ private void logWarning(String s) { log.warn s }
 // Minimal Protobuf codec
 // =============================================================================
 
-// KONNECTED: the Map<Integer, List> generics here are load-bearing, not decoration. Upstream v1.3
-// stripped them to a raw Map, which makes tags.computeIfAbsent(tag){...} return Object and the
-// following .add(val) a static type-check error: "Cannot find matching method Object#add". Groovy
-// 2.4 (what Hubitat runs today) lets it through; Groovy 3+ rejects it and the whole library fails
-// to compile. Restored to the v1.2 signature so it builds on both. Don't re-strip these.
+// FIX-15: the Map<Integer, List> generics here are load-bearing, not decoration. With a raw Map,
+// tags.computeIfAbsent(tag){...} returns Object and the following .add(val) is a static
+// type-check error: "Cannot find matching method Object#add". Groovy 2.4 (what Hubitat runs
+// today) lets it through; Groovy 3+ rejects it and the whole library fails to compile, taking
+// every driver with it. Restored to the v1.2 signature, which builds on both. Don't re-strip.
 @CompileStatic
 private static Map<Integer, List> protobufDecode(ByteArrayInputStream stream, long available) {
     Map<Integer, List> tags = [:]
