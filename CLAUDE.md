@@ -68,7 +68,7 @@ The library owns these `state` keys: `reconnectDelay`, `requireRefresh`, `servic
 
 `origin` = `konnected-io/hubitat-public`, `upstream` = `bradsjm/hubitat-public`.
 
-**As of 2026-07-30 the fork carries no library changes at all.** `main` tracks `upstream/main` exactly; the only file that differs is this CLAUDE.md. Keep it that way — anything we need in the library should go upstream as a PR rather than accumulate here, because a divergent fork makes every future upstream pickup a manual merge.
+**As of 2026-07-31 the fork carries no library changes at all.** `main` tracks `upstream/main` exactly; the only file that differs is this CLAUDE.md. Keep it that way — anything we need in the library should go upstream as a PR rather than accumulate here, because a divergent fork makes every future upstream pickup a manual merge.
 
 Getting back in sync when upstream moves is therefore just:
 
@@ -76,15 +76,25 @@ Getting back in sync when upstream moves is therefore just:
 git fetch upstream && git rebase upstream/main
 ```
 
-History: the fork previously sat on v1.2 plus a local passwordless-auth patch. It was rebased onto upstream v1.3, three fixes were made on top, and those were submitted and merged as [bradsjm/hubitat-public#45](https://github.com/bradsjm/hubitat-public/pull/45) — so they are upstream's code now, marked in-source as `FIX-13`/`FIX-14`/`FIX-15`. Upstream also took the `API_HELPER_VERSION = '1.3.1'` bump, so the version strings agree again.
+In practice a **merge** has been the better move both times, and is the precedent in this history (`ed0f411`, `cce259e`). Our `main` carries a decade of already-upstreamed commits plus zip auto-commits; `rebase` replays all of them and conflicts on the binary bundle, while `merge` resolves cleanly because the only real content difference is this file. Check `git diff upstream/main main --stat` first — if CLAUDE.md is the only entry, the merge is a formality.
 
-The three fixes are worth knowing about because they are load-bearing and easy to undo by accident:
+History: the fork previously sat on v1.2 plus a local passwordless-auth patch. It was rebased onto upstream v1.3, three fixes were made on top, and those were submitted and merged as [bradsjm/hubitat-public#45](https://github.com/bradsjm/hubitat-public/pull/45) — `FIX-13`/`FIX-14`/`FIX-15`, upstream's code now, with the `API_HELPER_VERSION = '1.3.1'` bump. Two more followed as [bradsjm/hubitat-public#46](https://github.com/bradsjm/hubitat-public/pull/46) — `FIX-16`/`FIX-17` and `1.3.2`.
+
+**When opening an upstream PR, never PR straight from a branch cut off our `main`** — it drags this Konnected-internal CLAUDE.md along with it. Cut a clean branch off `upstream/main` and cherry-pick, as `pr/api-1.14-object-id-derivation` did. Also note the argument that lands upstream is *upstream's own* breakage: six of the bundled example drivers (`ESPHome-AthomHumanPresenceSensor`, `ESPHome-EverythingPresenceOne`, `ESPHome-MultiSwitch`, `ESPHome-MultiSwitchSensor`, `ESPHome-MultiContactSensor`, `ESPHome-UpsyDesky`) key off `objectId` exactly like ours do.
+
+The five fixes are worth knowing about because they are load-bearing and easy to undo by accident:
 
 1. **`case MSG_AUTHENTICATION_RESPONSE` in `parseMessage`** → `espHomeUnsupervisedAuthenticationResponse()`. `espHomeConnectRequest()` gates on the negotiated API version: API ≤ 1.11 waits for a reply, API ≥ 1.12 advances immediately without supervising. That gate is correct and must be kept — password auth was *removed* in ESPHome 2026.1.0, so those devices auto-authenticate on Hello and never reply. But a 2025.10–2025.12 device built with `USE_API_PASSWORD` still does reply, and without this case that reply is logged as an unhandled message type while an invalid password goes undetected. The handler deliberately does *not* call `espHomeConnectResponse()`, which would queue a duplicate `DeviceInfoRequest` on the fast path.
 
 2. **Per-entity `device_id` field numbers.** There is no global field number — each `ListEntitiesXxxResponse` gives `device_id` its own next-free field (26 is correct only for climate), and it's a `uint32` varint, not a string. Hence `parseEntity(tags, deviceIdField)` read via `getIntTag`, defaulting to `0`.
 
 3. **`protobufDecode()` generics must stay `Map<Integer, List>`.** With a raw `Map`, `tags.computeIfAbsent(tag){...}` returns `Object`, so the following `.add(val)` is a static type-check error. Groovy 2.4 lets it through; Groovy 3+ rejects it and the *entire library* fails to compile, taking every driver with it.
+
+4. **`HelloRequest` must send `api_version_major`/`minor` (fields 2/3).** Omitting them made ESPHome record us as API `0.0` and log `using outdated API 0.0, update to 1.14+`. Cosmetic until it wasn't: ESPHome 2026.1 ([esphome#12698](https://github.com/esphome/esphome/pull/12698)) removed `object_id` from the protocol and bumped the API to 1.14 but kept sending it to sub-1.14 clients — reporting `0.0` is the only reason the library kept working — and 2026.7.0 ([esphome#17108](https://github.com/esphome/esphome/pull/17108)) deleted that compat branch, so `object_id` now arrives empty for *everyone*. Verified across all 33 files of the `api` component at tag `2026.7.3` that `client_supports_api_version()` is referenced in exactly one place, the warning itself, so declaring 1.14 changes no other device behavior.
+
+5. **`parseEntity()` derives `objectId` from the entity name when the wire field is empty**, mirroring ESPHome's `str_sanitize(str_snake_case(name))`. **FIX-16 and FIX-17 are only correct together** — on 2026.1–2026.6, declaring 1.14 without the derivation tells devices to stop sending `object_id` and breaks firmware that currently works. The derivation is byte-wise on purpose: `name.toLowerCase().replaceAll(...)` is wrong twice, because ESPHome walks the UTF-8 *bytes* (a multi-byte character becomes one underscore per byte) and `String.toLowerCase()` is locale-sensitive.
+
+   Why this hides: drivers persist entity keys in `state` and the `key` is an `object_id` *hash* computed on-device, so it never changed. Breakage surfaces only on a fresh pair or driver reinstall — which is why a customer can be broken while your own test device looks fine.
 
 Device handshake behavior, if you need to reason about it again:
 
@@ -154,6 +164,8 @@ unzip -p b.zip esphome.espHomeApiHelper.groovy | grep API_HELPER_VERSION
 ```
 
 Release `2026.7.0` (2026-07-30) shipped library `1.3.1`; package versions went to alarm-panel 1.0.3, gdov1s 1.0.3, gdov2s 1.1.3, gdov2q 1.2.3.
+
+Release `2026.7.1` (2026-07-31) shipped library `1.3.2` (the FIX-16/FIX-17 ESPHome 2026.7 `object_id` fix); package versions went to alarm-panel 1.0.4, gdov1s 1.0.4, gdov2s 1.1.4, gdov2q 1.2.4. Verify the *product* bundles too, not just the shared one — each `wget`s its own copy of the library, so they can diverge from `ESPHome-API-Library-Bundle.zip`.
 
 When changing the library, check the consumers in `konnected-hubitat/drivers/` rather than the example drivers in this repo. The v1.3 rebase was verified against them: the library's public surface (constants + non-private methods) is purely additive with no removals, and every message-map shape those drivers consume (`binary`, `switch`, `cover`, `lock`, `select`, `number`, `sensor`, `text`) is byte-identical to v1.2.
 
