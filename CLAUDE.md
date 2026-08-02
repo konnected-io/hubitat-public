@@ -152,6 +152,8 @@ Creating the GitHub release is only half of it. HPM decides whether to *offer* a
 1. Patch-bump `version` in all four `package-*.json` on `master` and push (leave `dateReleased` alone — precedent is `58a5dc7`).
 2. `gh release create <YYYY.M.PATCH> --target master` — CalVer, e.g. `2026.7.0`.
 
+**Never do step 1 without step 2.** A bump with no release is worse than doing nothing: HPM sees the new `version` on `master` and offers the update, but the bundle still comes from `releases/latest/download/...`, which is the *previous* release. Customers get byte-identical content, and because they now report the bumped version they are never re-prompted when the real fix ships — the only way out is a second bump. This happened on 2026-08-01 (`2632d5d` bumped to `.5`, no release), and a customer reported the exact bug the release was meant to fix after "upgrading" to alarm-panel 1.0.5. If you find yourself in that state, bump again rather than trying to re-cut the same version.
+
 The workflow fires on release creation, `wget`s the library from `hubitat-public@main`, and uploads five assets: the shared `ESPHome-API-Library-Bundle.zip` plus one per product.
 
 Because all four packages share the one bundle URL, **a release ships every product at once** — there is no way to release the GDO path without also releasing the alarm panel path. Factor that into what you test before cutting.
@@ -166,6 +168,8 @@ unzip -p b.zip esphome.espHomeApiHelper.groovy | grep API_HELPER_VERSION
 Release `2026.7.0` (2026-07-30) shipped library `1.3.1`; package versions went to alarm-panel 1.0.3, gdov1s 1.0.3, gdov2s 1.1.3, gdov2q 1.2.3.
 
 Release `2026.7.1` (2026-07-31) shipped library `1.3.2` (the FIX-16/FIX-17 ESPHome 2026.7 `object_id` fix); package versions went to alarm-panel 1.0.4, gdov1s 1.0.4, gdov2s 1.1.4, gdov2q 1.2.4. Verify the *product* bundles too, not just the shared one — each `wget`s its own copy of the library, so they can diverge from `ESPHome-API-Library-Bundle.zip`.
+
+Release `2026.8.0` (2026-08-02) shipped library `1.3.3` (FIX-18, gating the heartbeat logging that upstream PR #42 left unguarded); package versions went to alarm-panel 1.0.6, gdov1s 1.0.6, gdov2s 1.1.6, gdov2q 1.2.6. The `.5` versions were burned by the no-release mistake described above and shipped nothing.
 
 When changing the library, check the consumers in `konnected-hubitat/drivers/` rather than the example drivers in this repo. The v1.3 rebase was verified against them: the library's public surface (constants + non-private methods) is purely additive with no removals, and every message-map shape those drivers consume (`binary`, `switch`, `cover`, `lock`, `select`, `number`, `sensor`, `text`) is byte-identical to v1.2.
 
