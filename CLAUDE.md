@@ -48,13 +48,13 @@ Note the function names still say `Connect` (`espHomeConnectRequest`/`espHomeCon
 A driver using this library must:
 
 - End with `#include esphome.espHomeApiHelper`
-- Declare `attribute 'networkStatus', 'enum', ['connecting', 'online', 'offline']` — the library both writes it and reads it back via `isOffline()`, so omitting it breaks the send path
+- Declare `attribute 'networkStatus', 'enum', ['connecting', 'online', 'offline']` — the library writes it and surfaces it to the user. Hubitat **silently drops** `sendEvent` for an undeclared attribute, so `currentValue()` stays null forever: the connection state is invisible in the UI, and pre-1.3.4 that null also broke `isOffline()` (always false, so the send path wrote into dead sockets) and the FIX-18 log de-dupe (every keepalive ping response looked like a transition — the "is online: ping response" flood). 1.3.4 tracks status in `state` instead and warns once when the declaration is missing, but the driver must still declare it. `konnected-alarm-panel.groovy` shipped without it until 2026-08-30 — check any new driver.
 - Define preferences named exactly `ipAddress` (required), `password` (optional), `logEnable` (optional bool) — the library reads `settings.*` directly
 - Call `openSocket()` from `initialize()` and `closeSocket(reason)` from `uninstalled()`
 - Implement `void parse(Map message)`
 - Set `singleThreaded: true` in `metadata.definition` (all 19 bundled drivers do)
 
-The library owns these `state` keys: `reconnectDelay`, `requireRefresh`, `services`, `apiVersionMajor`, `apiVersionMinor`, `noiseDetected`. It also writes device data values (`MAC Address`, `Compile Time`, `ESPHome Version`, `Board Model`, …) and **overwrites `device.deviceNetworkId`** with the device's MAC on every DeviceInfo response.
+The library owns these `state` keys: `reconnectDelay`, `requireRefresh`, `services`, `apiVersionMajor`, `apiVersionMinor`, `noiseDetected`, `networkStatus` (FIX-19: authoritative connection state, since the attribute may not exist), `networkAttributeMissing`. It also writes device data values (`MAC Address`, `Compile Time`, `ESPHome Version`, `Board Model`, …) and **overwrites `device.deviceNetworkId`** with the device's MAC on every DeviceInfo response.
 
 ## Known constraints
 
@@ -95,6 +95,8 @@ The five fixes are worth knowing about because they are load-bearing and easy to
 5. **`parseEntity()` derives `objectId` from the entity name when the wire field is empty**, mirroring ESPHome's `str_sanitize(str_snake_case(name))`. **FIX-16 and FIX-17 are only correct together** — on 2026.1–2026.6, declaring 1.14 without the derivation tells devices to stop sending `object_id` and breaks firmware that currently works. The derivation is byte-wise on purpose: `name.toLowerCase().replaceAll(...)` is wrong twice, because ESPHome walks the UTF-8 *bytes* (a multi-byte character becomes one underscore per byte) and `String.toLowerCase()` is locale-sensitive.
 
    Why this hides: drivers persist entity keys in `state` and the `key` is an `object_id` *hash* computed on-device, so it never changed. Breakage surfaces only on a fresh pair or driver reinstall — which is why a customer can be broken while your own test device looks fine.
+
+**FIX-18 / FIX-19 (connection logging), added after that list.** FIX-18 de-duped the `networkStatus` log line and gated the heartbeat debug spam. FIX-19 (1.3.4) fixed the case FIX-18 could not see: de-duping against `device.currentValue(NETWORK_ATTRIBUTE)` is useless on a driver that never declared the attribute, because Hubitat drops the event and `currentValue()` is null forever — so `changed` was always true and the customer got "is online: ping response" at INFO on every library-initiated keepalive. FIX-19 moves the source of truth to `state.networkStatus` (falling back to the attribute only until state is first written), warns once when the attribute is missing, and raises every connection-loss path to WARN: `closeSocket()` (now including the reason), the `offline` transition, and retry-count-exceeded. Note that connection *loss* was never silent by accident — pre-1.3.4 it just logged at INFO, and `isOffline()` returning a permanent false on those drivers meant the library never noticed a dead socket in the first place.
 
 Device handshake behavior, if you need to reason about it again:
 
